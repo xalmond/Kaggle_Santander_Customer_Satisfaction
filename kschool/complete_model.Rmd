@@ -1,9 +1,3 @@
----
-output:
-  html_document:
-    theme: readable
-  pdf_document: default
----
 
 ### Kaggle:  Satisfacción de clientes del Banco Santander
 ##### Proyecto final del máster en Data Science de [KSchool](http://www.kschool.com/) - Notebook por [Javier Almendro](https://www.linkedin.com/in/javieralmendro)
