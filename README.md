@@ -3,7 +3,7 @@ https://www.kaggle.com/c/santander-customer-satisfaction
 
 Desde los equipos de soporte hasta la línea de dirección, para todos los estamentos del Banco Santander la satisfacción del cliente es una medida clave del éxito. Por lo tanto el Banco Santander es consciente que un cliente insatisfecho, no sólo no seguirá siéndolo, sino que además abandonará sin avisar.
 
-![](https://github.com/xalmond/kaggle_santander_customer_satisfaction/blob/master/real/images/santander_custsat_red.jpg)  
+![](https://github.com/xalmond/kaggle_santander_customer_satisfaction/blob/master/submission/images/santander_custsat_red.jpg)  
 
 Por ello, con fecha del 2 de Marzo de 2016, publica en la plataforma [Kaggle](http://www.kaggle.com) una competición con título ["¿Qué clientes son clientes felices?](https://www.kaggle.com/c/santander-customer-satisfaction). Mediante dicha competición, el banco solicita la ayuda a todos los Kagglers para conseguir identificar lo antes posible clientes insatisfechos, y así poder anticipar las acciones necesarias para mejorar su satisfacción antes que sea demasiado tarde.
 
