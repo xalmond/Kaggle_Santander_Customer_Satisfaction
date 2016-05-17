@@ -1,0 +1,472 @@
+---
+output:
+  html_document:
+    theme: readable
+  pdf_document: default
+---
+
+### Kaggle:  Satisfacción de clientes del Banco Santander
+##### Proyecto final del máster en Data Science de [KSchool](http://www.kschool.com/) - Notebook por [Javier Almendro](https://www.linkedin.com/in/javieralmendro)
+
+## 1.- Introducción
+
+Desde los equipos de soporte hasta la línea de dirección, para todos los estamentos del Banco Santander la satisfacción del cliente es una medida clave del éxito. Por lo tanto el Banco Santander es consciente que un cliente insatisfecho, no sólo no seguirá siéndolo, sino que además abandonará sin avisar.
+
+![](./images/santander_custsat_red.jpg)  
+
+Por ello, con fecha del 2 de Marzo de 2016, publica en la plataforma [Kaggle](http://www.kaggle.com) una competición con título ["¿Qué clientes son clientes felices?](https://www.kaggle.com/c/santander-customer-satisfaction). Mediante dicha competición, el banco solicita la ayuda a todos los Kagglers para conseguir identificar lo antes posible clientes insatisfechos, y así poder anticipar las acciones necesarias para mejorar su satisfacción antes que sea demasiado tarde.
+
+#### Librerías requeridas
+
+Este notebook utiliza las siguientes librerías de R:
+
+```{r results='hide', message=FALSE, warning=FALSE}
+
+library(xgboost)
+library(ROCR)
+library(Ckmeans.1d.dp)
+
+```
+
+## 2.- Lectura de los datos y análisis preliminar
+
+#### Origen de los datos
+
+El banco aporta un conjunto de datos sobre una gran cantidad de variables con el objetivo de predecir si un cliente está satisfecho o insatisfecho con su experiencia con la entidad. 
+
+1. En primer lugar, se aporta un fichero [training.csv](https://www.kaggle.com/c/santander-customer-satisfaction/download/train.csv.zip) que consta de cientos de variables **numéricas y anónimas**, incluyendo una columna llamada `TARGET` que contiene un 1 para clientes insatisfechos y un 0 para los satisfechos.
+2. Un segundo fichero [test.csv](https://www.kaggle.com/c/santander-customer-satisfaction/download/test.csv.zip), en el que predecir para cada cliente si está satisfecho o no.
+
+##### Lectura y preparación de los ficheros de datos
+
+Ya que el plazo de la competición ha vencido, no hay posibilidad de comprobar la exactitud de modelo entrenado con el fichero de training del Banco Santander. Por lo tanto, se procede a dividir el fichero de training original en dos, el primero hará la función de training y el segundo la función de test. En el training se entrenará el modelo de aprendizaje automático o **machine learning** y con el segundo se comprobará su validez. La división se efectuará aleatoriamente dejando dos bloques de igual tamaño y con igual número de 0s y 1s en su columna `TARGET`.
+
+Para ambos Dataframes, se elimina la primera columna `ID` y se segrega la última columna `TARGET` en un DataFrame adicional.
+
+```{r}
+
+set.seed(1967)
+div_done <- TRUE
+if (div_done){
+  df_train <- read.csv("./data/train.csv", header = TRUE, sep = ",")
+  df_test <- read.csv("./data/test.csv", header = TRUE, sep = ",")
+} else {
+  df_train_orig <- read.csv('./data/train_original.csv', header = TRUE, sep = ',', na.strings = c("","NA"))
+
+  df_train_orig_zeros <- df_train_orig[df_train_orig$TARGET == 0,]
+  num_zeros <- nrow(df_train_orig_zeros)
+  sample_training <- sample(num_zeros,num_zeros/2)
+  df_train_zeros <- df_train_orig_zeros[sample_training,]
+  df_test_zeros <- df_train_orig_zeros[-sample_training,]
+
+  df_train_orig_ones <- df_train_orig[df_train_orig$TARGET == 1,]
+  num_ones <- nrow(df_train_orig_ones)
+  sample_training <- sample(num_ones,num_ones/2)
+  df_train_ones <- df_train_orig_ones[sample_training,]
+  df_test_ones <- df_train_orig_ones[-sample_training,]
+
+  df_train <- rbind(df_train_ones,df_train_zeros)
+  df_train <- df_train[order(df_train$ID),]
+
+  df_test <- rbind(df_test_ones,df_test_zeros)
+  df_test <- df_test[order(df_test$ID),]
+
+  write.csv(df_train,"./data/train.csv", row.names = FALSE)
+  write.csv(df_test,"./data/test.csv", row.names = FALSE)
+}
+
+df_target <- df_train$TARGET
+df_train$ID <- NULL
+df_train$TARGET <- NULL
+
+df_test_target <- df_test$TARGET
+df_test$ID <- NULL
+df_test$TARGET <- NULL
+
+```
+
+#### Análisis inicial de los datos
+
+El Banco Santander no aporta ningún tipo de información sobre el significado concreto de cada uno de los predictores, e incluso en la breve descripción aportada, se recalca el carácter anónimo de dichas variables. En principio, no se prevé que este anonimato pueda impactar en el cálculo de predicciones sobre si un cliente está satisfecho o no. No obstante, de cara a una interpretación posterior, podrían ser de utilidad las opiniones sobre el significado de dichas variables expresadas por diferentes usuarios en el [foro de Kaggle](https://www.kaggle.com/c/santander-customer-satisfaction/forums).
+
+```{r}
+
+cat("\nTrain:  número de filas: ", dim(df_train)[1], ", número de columnas: ", dim(df_train)[2],
+    "\nTARGET: número de 0's:   ", length(df_target)-sum(df_target), ", número de 1's:     ", sum(df_target),
+    "\n\nTest:   número de filas: ", dim(df_test)[1], ", número de columnas: ", dim(df_test)[2],
+    "\nTARGET: número de 0's:   ", length(df_test_target)-sum(df_test_target), ", número de 1's:     ",
+    sum(df_test_target),
+    "\n\n")
+
+```
+
+## 3.- Predicción básica
+
+En esta fase del proyecto, se lleva a cabo una predicción básica que consiste en utilizar todo el conjunto de datos `TRAINING` aportado por el Banco Santander y, sin ningún tratamiento previo, entrenar el modelo de predicción elegido con todos sus parámetros por defecto.
+
+#### Introducción a xgboost: eXtreme Gradient Boosting
+
+XGBoost es una implementación del algoritmo **Gradient Boost**, el cual está basado en multitud de árboles de decisión. Inicialmente fue diseñado y desarrollado en C++ por Tianqi Chen, para posteriormente Tong He elaborar el paquete. Este último, no sólo es conocido por su rapidez y exactitud en la capacidad de predicción exacta, sino que aporta multitud de funciones que ayudan a entender el modelo fácilmente.
+
+XGBoost soporta únicamente datos en formato matriz numérica, por lo que se procede a convertir el fichero de training al formato interno idóneo de xgboost mediante la funcionalidad añadida `xgb.DMatrix`. En cuanto al formato de `TARGET`, cumple con el requisito incluido en la documentación de la librería de comenzar por 0.
+
+```{r}
+
+matrix_train <- xgb.DMatrix(data.matrix(df_train), label = as.numeric(df_target))
+
+```
+
+#### Parámetros de xgboost
+
+A la hora de ejecutar xgboost, se contemplan tres tipos de parámetros posibles: parámetros generales, parámetros _booster_ y parámetros sobre tarea.
+
+* Parámetros generales. Se refieren a cual va a ser el booster que se va a utilizar, normalmente árbol o modelo lineal.
+    + `booster` [default=gbtree] que booster usar, puede ser gbtree o gblinear.
+    + `silent`  [default=0], donde 1 significa modo "silencioso"
+* Parámetros sobre el booster. Los cuales dependen del booster elegido. 
+* Parámetros sobre tareas. Permiten ajustar el escenario de aprendizaje.
+    + `objective` [ default=reg:linear ] pudiendo elegir entre "reg:linear", "reg:logistic", "binary:logistic", "binary:logitraw", "count:poisson", "multi:softmax", "multi:softprob" y "rank:pairwise"
+    + `eval_metric`, para definir, en función de los objetivos, la métrica asignada entre "rmse", "mae", "logloss", "error", "merror", "mlogloss", "auc", "ndcg" y "map"
+    
+En este primer escenario de ejecución denominado "predicción básica", se ajusta el modelo usando todo el fichero de training con los siguientes parámetros:
+
+* Parámetros generales.
+    + booster = gbtree 
+    + silent  = 1
+* Parámetros sobre tareas.
+    + objective = "binary:logistic". La variable a predecir `TARGET` se compone únicamente de 0 y 1.
+    + eval_metric = "auc". Ya que este parámetro AUC (*area under the ROC curve*) es el elegido por Banco Santander para evaluar la exactitud de cada predicción enviada a [Kaggle](https://www.kaggle.com/c/santander-customer-satisfaction/details/evaluation)
+
+> _En este primer escenario de ejecución, se dejan todos los parámetros sobre el booster por defecto._
+
+A continuación se procede a entrenar el modelo con el conjunto de datos de training y a predecir sobre ambos conjuntos de training y test para poder comparar sus resultados.
+
+```{r}
+
+fix_params <- list(booster = "gbtree", 
+                   objective = "binary:logistic", 
+                   eval_metric = "auc")
+ini_time <- proc.time()
+model <- xgb.train(data = matrix_train, param = fix_params, nrounds = 100, verbose = 0)
+cat("Tiempo de entrenamiento: ", round((proc.time()-ini_time)[3]), "seg")
+
+prob_train <- predict(model, matrix_train)
+pred_train <- prediction(prob_train,df_target)
+perf_train <- performance(pred_train, measure = "tpr", x.measure = "fpr")
+
+prob_test <- predict(model, data.matrix(df_test))
+pred_test <- prediction(prob_test,df_test_target)
+perf_test <- performance(pred_test, measure = "tpr", x.measure = "fpr")
+
+```
+
+#### Curva ROC
+
+Cuando se trata de un clasificador binario como el que nos ocupa, existen dos tipos de errores para medir la exactitud de las predicción realizada:
+
+* Falso negativo: cuando la predicción asigna la categoría 0 y en realidad pertenece a la categoría 1.
+* Falso positivo: cuando la predicción asigna la categoría 1 y en realidad pertenece a la categoría 0.
+
+La denominada **Matriz de confusión** es capaz de mostrar de forma adecuada estos dos tipos errores junto con los aciertos de la predicción. Adicionalmente, dos conceptos básicos del campo del diagnóstico médico, se utilizan para medir el rendimiento de una predicción y son fácilmente calculables a partir de la matriz de confusión:
+
+* Sensibilidad: es el porcentaje de positivos que son correctamente identificados
+* Especificidad: es el porcentaje de negativos que son identificados correctamente.
+
+La curva ROC (acrónimo de **R**eceiver **O**perating **C**haracteristic) es una representación gráfica de la sensibilidad frente a (1 - especificidad) para un sistema clasificador binario según varía el umbral de discriminación (valor a partir del cual se decide que un caso es un positivo). En definitiva, representa el ratio de verdaderos positivos (TPR) frente al ratio de falsos positivos (FPR), en función del umbral de discriminación 
+
+A continuación, utilizando la librería de R ROCR, se representa dicha curva ROC para ambas predicciones (training y test).
+
+```{r fig.width=4, fig.height=4 }
+
+plot(x = perf_train@x.values[[1]], y = perf_train@y.values[[1]], col="red", lwd=2, type="l", 
+     main="ROC Curve" , xlab="FPR or (1 - specificity)", ylab="TPR or sensitivity" )
+lines(x = perf_test@x.values[[1]], y = perf_test@y.values[[1]], col="blue", lwd=2)
+legend(.6,0.36,c("train","test"),lty=c(1,1),col=c("red","blue"))
+
+```
+
+#### Resultado de predicción básica
+
+Finalmente se calcula el parámetro AUC que no es sino el área bajo dicha curva ROC (acrónimo de **A**rea **U**nder the ROC **C**urve), ya que es el parámetro de evaluación que usa Banco Santander en esta competición. En general, y este caso no es de otra forma, la exactitud de las predicciones son mas altas para el fichero de training que para el de test. No obstante, la gran diferencia que se da en este caso entre ambas hace pensar en el concepto de **overfitting**, el cual se explica en profundidad en un capítulo posterior.
+
+```{r}
+
+auc_perf <- performance(pred_train, measure = "auc")
+auc_train_value <- auc_perf@y.values[[1]]
+auc_perf <- performance(pred_test, measure = "auc")
+auc_test_value <- auc_perf@y.values[[1]]
+cat(paste0("Predicción Básica. Training AUC = ", round(auc_train_value,6)," Test AUC = ", round(auc_test_value,6)))
+
+```
+
+## 4.- Predicción incluyendo selección de variables
+
+La reciente explosión en tamaño de los datos disponibles ha provocado el desarrollo, no solo de plataformas Big Data, sino también de algoritmos de análisis paralelizado de dichos datos. En este caso los datos no han crecido tanto en número de registros como en la cantidad de atributos disponibles **(369 columnas)**. Sin embargo, no siempre más es mejor, ya que demasiados predictores o dimensiones pueden conducir a un pobre rendimiento en el análisis posterior, tanto en la velocidad de ejecución como el acierto de las predicciones.
+
+Entre multitud alternativas, a continuación se introducen tres clases importantes de métodos para la exclusión de variables irrelevantes:
+
+1. **Selección de subconjuntos:** Este enfoque implica la identificación de un subconjunto de predictores reduciendo el número de columnas, y al mismo tiempo, perder la menor cantidad de información posible. Estos son varios de los procedimientos más usados en la actualidad para reducir dicha cantidad de predictores:
+    + Low Variance Filter
+    + High Correlation Filter
+2. **Contracción o regularización:** Al contrario que el anterior, este enfoque implica el ajuste de un modelo utilizando todos los prescriptores. Sin embargo, en este caso son los coeficientes (en una regresión lineal) los reducidos hacia el valor 0. Entre los métodos de regularización, mediante los cuales algunos coeficientes pueden estimarse exactamente cero y así reducirse el número de variables involucradas, destacan:
+    + Ridge regression
+    + The Lasso
+3. **Reducción de la dimensionalidad:** En este caso, el objetivo consiste en condensar la información de un conjunto de variables en un nuevo conjunto de variables (de menor número que el anterior), mediante el uso de diferentes combinaciones (proyecciones) de dichas variables. Existen diferentes técnicas de transformación tanto lineales, como no lineales, destacando entre las primeras:
+    + Principal Component Analysis
+
+#### Low Variance Filter
+
+Las columnas que contienen pocos cambios en sus registros apenas aportan información al conjunto de datos, por lo que aquellas columnas con una varianza menor a un umbral determinado son eliminadas. En este caso se fija el umbral en cero, por lo que únicamente son borradas las columnas con todos sus registros iguales.
+
+```{r}
+
+var_threshold <- 0
+
+names_prev <- names(df_train)
+df_test <- df_test[,apply(df_train,2,var) != var_threshold]
+df_train <- df_train[,apply(df_train,2,var) != var_threshold]
+names_prev[!(names_prev %in% names(df_train))]
+
+cat("Número de filas: ", dim(df_train)[1], " Número de columnas: ", dim(df_train)[2])
+
+```
+
+#### High Correlation Filter
+
+Dos columnas de datos diferentes con tendencias similares entre sí, o lo que es lo mismo, con valores muy correlados aportan una cantidad de información muy similar al conjunto de datos, por lo que una de ellas puede ser eliminada. En concreto, dos columnas con el coeficiente de correlación superior a un umbral son reducidas a una sola.
+
+En este caso, se fija el umbral en 0.999, por lo se borran todas aquellas columnas que estén totalmente correladas con alguna otra.
+
+```{r}
+
+cor_threshold <- 0.999
+
+names_prev <- names(df_train)
+df_cor <- abs(cor(df_train))
+diag(df_cor) <- 0
+df_cor[lower.tri(df_cor)] <- 0
+df_test <- df_test[,!(apply(df_cor,2,max) >= cor_threshold)]
+df_train <- df_train[,!(apply(df_cor,2,max) >= cor_threshold)]
+names_prev[!(names_prev %in% names(df_train))]
+
+cat("Número de filas: ", dim(df_train)[1], " Número de columnas: ", dim(df_train)[2])
+
+```
+
+#### XGBoost feature importance
+
+La función `xgb.importance`, incluida en la librería de R xgboost, permite ahondar en la comprensión del modelo entrenado. Aporta para cada variable del conjunto de datos los siguientes parámetros:
+
+1. `Features`: Nombre de la variable.
+2. `Gain`: Contribución de esa variable al modelo. En el caso de modelo en árbol, tiene en cuenta cada ganancia de cada variable de cada árbol, dando una visión del todo el modelo mediante la media por variable.
+3. `Cover`: Métrica sobre el número de observación relacionada con la variable.
+4. `Weight`: Porcentaje que representa el número de veces que esa variable ha sido incluida en un árbol.
+
+Tras ejecutar la función `xgb.importance`, únicamente se seleccionan para entrenar posteriormente el modelo aquellas con mayor valor en el campo `Feature`.
+
+```{r}
+
+names_prev <- names(df_train)
+matrix_train <- xgb.DMatrix(data.matrix(df_train), label = as.numeric(df_target))
+model <- xgb.train(data = matrix_train, param = fix_params, nrounds = 100, verbose = 0)
+imp_matrix <- xgb.importance(feature_names = names(df_train), model = model)
+df_test <- df_test[,imp_matrix[imp_matrix$Gain>0.0005]$Feature]
+df_train <- df_train[,imp_matrix[imp_matrix$Gain>0.0005]$Feature]
+names_prev[!(names_prev %in% names(df_train))]
+
+cat("Número de filas: ", dim(df_train)[1], " Número de columnas: ", dim(df_train)[2])
+
+```
+
+#### Resultado de predicción con selección de variables
+
+A continuación se ejecuta el mismo entrenamiento y predicción que en el apartado básico: se utiliza xgboost con todos los parámetros por defecto. El único cambio consiste en hacerlo utilizando sólo el subconjunto de variables seleccionadas (66 de las 369 originales). Se comprueba que mejoran tanto la velocidad de ejecución como el acierto de las predicciones, tanto para training como, lo que es más importante, para test.
+
+```{r fig.width=7, fig.height=7 }
+
+xgb.plot.importance(imp_matrix[imp_matrix$Gain>0.01])
+
+```
+
+```{r fig.width=4, fig.height=4 }
+
+matrix_train <- xgb.DMatrix(data.matrix(df_train), label = as.numeric(df_target))
+
+set.seed(1967)
+ini_time <- proc.time()
+model <- xgb.train(data = matrix_train, param = fix_params, nrounds = 100, verbose = 0)
+cat("Tiempo de entrenamiento: ", round((proc.time()-ini_time)[3]), "seg")
+
+# Training Prediction
+
+prob_train <- predict(model, matrix_train)
+pred_train <- prediction(prob_train,df_target)
+perf_train <- performance(pred_train, measure = "tpr", x.measure = "fpr")
+
+# Test Prediction
+
+prob_test <- predict(model, data.matrix(df_test))
+pred_test <- prediction(prob_test,df_test_target)
+perf_test <- performance(pred_test, measure = "tpr", x.measure = "fpr")
+
+# ROC Curve
+
+plot(x = perf_train@x.values[[1]], y = perf_train@y.values[[1]], col="red", lwd=2, type="l", 
+     main="ROC Curve" , xlab="FPR or (1 - specificity)", ylab="TPR or sensitivity" )
+lines(x = perf_test@x.values[[1]], y = perf_test@y.values[[1]], col="blue", lwd=2)
+legend(.6,0.36,c("train","test"),lty=c(1,1),col=c("red","blue"))
+
+# Training and Test AUC result
+
+auc_perf <- performance(pred_train, measure = "auc")
+auc_train_value <- auc_perf@y.values[[1]]
+auc_perf <- performance(pred_test, measure = "auc")
+auc_test_value <- auc_perf@y.values[[1]]
+cat(paste0("Predicción con selección de variables. Training AUC = ", round(auc_train_value,6),
+           " Test AUC = ", round(auc_test_value,6)))
+
+```
+
+## 5.- Predicción con validación cruzada
+
+En machine learning existe el concepto de sobreajuste u __overfitting__, que es el efecto de sobreentrenar un algoritmo de aprendizaje con los datos de training. En este caso, dicho algoritmo de aprendizaje puede quedar ajustado a unas características muy específicas de estos datos de training que no tienen relación causal con la función objetivo. La consecuencia es que mientras el éxito al responder a los datos de training sigue incrementándose, su actuación con muestras de conjunto de test va empeorando.
+
+En este sentido, la validación cruzada o __cross-validation__ es una técnica utilizada para evaluar los resultados de un análisis estadístico y garantizar que son independientes de los datos de training y de test. Inicialmente, consiste en repetir y calcular la media aritmética obtenida de las medidas de evaluación sobre diferentes particiones del conjunto de datos de training. Por tanto, este proceso permite además de evaluar el rendimiento del modelo (proceso de dominado __model assessment__) seleccionar el nivel adecuado de flexibilidad (__model selection__).   
+
+En realidad, la validación cruzada proviene de la mejora del método de retención o __holdout method__, que consiste en dividir en dos conjuntos complementarios los datos inicial (training y validation). A continuación sólo se ajusta la función de aproximación con el conjunto de datos de training y a continuación se predicen y se validan los valores de salida para el conjunto de datos de validation. Ya que la evaluación puede depender en gran medida de cómo es la división entre datos de training y validation aparece el concepto de validación cruzada.
+
+#### Validación cruzada de k iteraciones
+
+En la validación cruzada de K iteraciones o __K-fold cross-validation__ los datos de muestra se dividen en K subconjuntos. Uno de los subconjuntos se utiliza como datos de validation y el resto (K-1) como datos de training. El proceso de validación cruzada es repetido durante k iteraciones, con cada uno de los posibles subconjuntos de datos de prueba. Finalmente se realiza la media aritmética de los resultados de cada iteración para obtener un único resultado.
+
+En este ejercicio, se utiliza la herramienta `xgb.cv` incluida en la librería xgboost, la cual proporciona toda la funcionalidad necesaria para llevar a cabo la validación cruzada de k iteraciones. Esta función admite exactamente los mismos parámetros que `xgb.train` con el parámetro adicional `nfold`, el cual define el tamaño del subconjunto de validation.
+
+El uso de la función xgb.cv permite comprobar como va aumentando el valor del parámetro AUC según va aumentando el número de iteraciones del modelo sobre el conjunto de datos training. Sin embargo, también se comprueba la existencia de overfitting ya que, cuando se aplica al conjunto de validation en lugar de al de training, ese mismo parámetro AUC va disminuyendo a partir de un determinado número de iteraciones.
+
+
+```{r fig.width=5, fig.height=5 }
+
+set.seed(1967)
+model_cv <- xgb.cv(data = matrix_train, param = fix_params, nrounds = 100, verbose = 0, nfold = 10)
+
+max_round <- which.max(model_cv$test.auc.mean)
+plot( model_cv$train.auc.mean, type="l", lwd=1.5, col="red" , ylim=c(0.70, 1),
+      main="AUC - train vs test" , xlab="nrounds", ylab="AUC")
+lines(model_cv$test.auc.mean, type="l", lwd=1.5, col="blue" )
+abline(v=max_round, lty=4)
+legend(69,0.77,c("train","test"),lty=c(1,1),col=c("red","blue"))
+text(42,0.855,paste("max nround  = ", max_round))
+
+```
+
+#### Determinación de parámetros óptimos de XGBoost
+
+Hasta este momento, siempre se ha ejecutado la función de entrenamiento del modelo `xgb.train` con los parámetros de booster por defecto. El posterior ajuste de los siguientes parámetros permitirá aumentar la exactitud de la predicción y ajustar el overfitting:
+
+* Parámetros del booster. Dependen del booster elegido, en este caso de tipo árbol.
+    + `eta` [default=0.3] range: [0,1], parámetro sobre el shrinkage de los pesos de las variables en cada paso.
+    + `max_depth` [default=6] range: [1,∞], refleja la máxima profundidad de un árbol.
+    + `max_delta_step` [default=0] range: [0,∞], máximo diferencial permitido en la estimación de pesos en cada árbol.
+    + `subsample` [default=1] range: (0,1], representa el ratio de división para la instancia training
+    + `colsample_bytree` [default=1] range: (0,1], representa el ratio de división por columnas en cada árbol.
+
+A continuación se utiliza el mecanismo de cross-validation xgb.cv para determinar los parámetros óptimos del booster, no sólo desde el punto de vista de overfitting sino también desde el exactitud de modelo. El siguiente bucle ejecuta repetidamente el proceso cross-validation variando, de forma aleatoria dentro de un rango determinado, el conjunto de parámetros de booster y el número de iteraciones.
+
+```{r}
+
+cv_done <- TRUE
+if (cv_done){
+  all_lines <- read.csv("./data/result_cv.csv", header = TRUE, sep = ",")
+} else {
+  all_lines <- NULL
+  for (n in 1:150){
+    set.seed(1000+n)
+    tree_params <- list(eta = runif(1, 0.010, 0.04),
+                        max_depth = sample(5:8, 1),
+                        max_delta_step = sample(0:3, 1),
+                        subsample = runif(1, 0.7, 0.99),
+                        colsample_bytree = runif(1, 0.5, 0.99))
+    model_cv <- xgb.cv(param = append(fix_params,tree_params),
+                       data = matrix_train,
+                       nrounds = 1e4,
+                       nfold = 10,
+                       early.stop.round = 100,
+                       verbose = 0)
+    new_line <- data.frame( eta = tree_params$eta,
+                            max_depth = tree_params$max_depth,
+                            max_delta_step = tree_params$max_delta_step,
+                            subsample = tree_params$subsample,
+                            colsample_bytree = tree_params$colsample_bytree,
+                            best_itr = which.max(model_cv$test.auc.mean),
+                            best_auc = max(model_cv$test.auc.mean))
+    all_lines <- rbind(all_lines, new_line)
+  }
+  write.csv(all_lines,"./data/result_cv.csv", row.names = FALSE)
+}
+
+```
+
+#### Resultado de predicción con Cross-validation
+
+Finalmente se vuelve a ejecutar el entrenamiento sobre el conjunto de datos de training, pero esta vez utilizando los parámetros que maximizan el valor de `model_cv$test.auc.mean` del anterior apartado de cross-validation. Finalmente, se predice sobre el modelo de training y de test y se comparan ambos resultados.
+
+En cuanto a la comparación respecto a la "Predicción básica" y la "Predicción con selección de variables", si bien, tanto el tiempo necesario para entrenar el modelo como la exactitud de la predicción en el conjunto de datos de training empeora, la mejora observada en la predicción sobre los datos de test, hace que el proceso de cross-validation sea totalmente imprescindible.
+
+```{r fig.width=4, fig.height=4 }
+
+set.seed(1967)
+best <- all_lines[which.max(all_lines$best_auc),]
+tree_params <- list(eta = best$eta,
+                    max_depth = best$max_depth,
+                    max_delta_step = best$max_delta_step,
+                    subsample = best$subsample,
+                    colsample_bytree = best$colsample_bytree)
+
+cat(paste("Parámetros óptimos:",
+          "\n   eta              =", round(best$eta,2),
+          "\n   max_depth        =", best$max_depth,
+          "\n   max_delta_step   =", best$max_delta_step,
+          "\n   subsample        =", round(best$subsample,2),
+          "\n   colsample_bytree =", round(best$colsample_bytree,2)))
+
+ini_time <- proc.time()
+model <- xgb.train(data = matrix_train, param = append(fix_params,tree_params), nrounds = best$best_itr, verbose = 0)
+cat("Tiempo de entrenamiento: ", round((proc.time()-ini_time)[3]), "seg")
+
+# Training Prediction
+
+prob_train <- predict(model, matrix_train)
+pred_train <- prediction(prob_train,df_target)
+perf_train <- performance(pred_train, measure = "tpr", x.measure = "fpr")
+
+# Test Prediction
+
+prob_test <- predict(model, data.matrix(df_test))
+pred_test <- prediction(prob_test,df_test_target)
+perf_test <- performance(pred_test, measure = "tpr", x.measure = "fpr")
+
+# ROC Curve
+
+plot(x = perf_train@x.values[[1]], y = perf_train@y.values[[1]], col="red", lwd=2, type="l", 
+     main="ROC Curve" , xlab="FPR or (1 - specificity)", ylab="TPR or sensitivity" )
+lines(x = perf_test@x.values[[1]], y = perf_test@y.values[[1]], col="blue", lwd=2)
+legend(.6,0.36,c("train","test"),lty=c(1,1),col=c("red","blue"))
+
+# Training and Test AUC result
+
+auc_perf <- performance(pred_train, measure = "auc")
+auc_train_value <- auc_perf@y.values[[1]]
+auc_perf <- performance(pred_test, measure = "auc")
+auc_test_value <- auc_perf@y.values[[1]]
+cat(paste0("Predicción con  cross-validation. Training AUC = ", round(auc_train_value,6)," Test AUC = ", round(auc_test_value,6)))
+
+```
+
+## 6.- Referencias
+
+* [Wikipedia](https://www.wikipedia.org/)
+* [An Introduction to Statistical Learning: with Applications in R](https://www.amazon.es/Introduction-Statistical-Learning-Applications-Statistics-ebook/dp/B00DM0VX60), de Gareth James, Daniela Witten, Trevor Hastie y Robert Tibshirani
+* [XGBoost R Tutorial](https://github.com/dmlc/xgboost/blob/master/R-package/vignettes/xgboostPresentation.Rmd), de Tianqi Chen y Tong He
+* [XGBoost Parameters](https://github.com/dmlc/xgboost/blob/master/doc/parameter.md)
+* [XGBoost Documentation](https://xgboost-clone.readthedocs.io/en/latest/index.html), de xgboost developers
+* [Understanding XGBoost Model on Otto Dataset](https://github.com/dmlc/xgboost/blob/master/demo/kaggle-otto/understandingXGBoostModel.Rmd), de Michael Benesty
