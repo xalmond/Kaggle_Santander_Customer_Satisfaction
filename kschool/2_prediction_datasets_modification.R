@@ -21,6 +21,21 @@ cat("\nTrain:  número de filas: ", dim(df_train)[1], ", número de columnas: ",
     "\n\nTARGET: número de 0's:   ", length(df_target)-sum(df_target), ", número de 1's:     ", sum(df_target),
     "\n\n")
 
+# Managing Outliers 
+
+head(sort(unique(df_train$var3)))
+df_train[df_train$var3 == -999999,c("var3")] <- -1
+head(sort(unique(df_train$var3)))
+
+head(sort(unique(df_test$var3)))
+df_test[df_test$var3 == -999999,c("var3")] <- -1
+head(sort(unique(df_test$var3)))
+
+# Adding new feature
+
+df_train$num_zeros <- rowSums(df_train == 0)
+df_test$num_zeros <- rowSums(df_test == 0)
+
 # Low Variance Filter
 
 var_threshold <- 0
@@ -51,12 +66,12 @@ fix_params <- list(booster = "gbtree",
                    eval_metric = "auc")
 model <- xgb.train(data = matrix_train, param = fix_params, nrounds = 100, verbose = 0)
 imp_matrix <- xgb.importance(feature_names = names(df_train), model = model)
-df_test <- df_test[,imp_matrix[imp_matrix$Gain>0.0005]$Feature]
-df_train <- df_train[,imp_matrix[imp_matrix$Gain>0.0005]$Feature]
+df_test <- df_test[,imp_matrix[imp_matrix$Gain>0.001]$Feature]
+df_train <- df_train[,imp_matrix[imp_matrix$Gain>0.001]$Feature]
 names_prev[!(names_prev %in% names(df_train))]
 cat("Número de filas: ", dim(df_train)[1], " Número de columnas: ", dim(df_train)[2])
 
-xgb.plot.importance(imp_matrix[imp_matrix$Gain>0.0005])
+xgb.plot.importance(imp_matrix[imp_matrix$Gain>0.001])
 
 # XGBoost training fit
 

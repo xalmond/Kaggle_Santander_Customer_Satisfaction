@@ -10,7 +10,7 @@ Desde los equipos de soporte hasta la línea de dirección, para todos los estam
 
 Por ello, con fecha del 2 de Marzo de 2016, publica en la plataforma [Kaggle](http://www.kaggle.com) una competición con título ["¿Qué clientes son clientes felices?](https://www.kaggle.com/c/santander-customer-satisfaction). Mediante dicha competición, el banco solicita la ayuda a todos los Kagglers para conseguir identificar lo antes posible clientes insatisfechos, y así poder anticipar las acciones necesarias para mejorar su satisfacción antes que sea demasiado tarde.
 
-#### Librerías requeridas
+### Librerías requeridas
 
 Este notebook utiliza las siguientes librerías de R:
 
@@ -24,14 +24,14 @@ library(Ckmeans.1d.dp)
 
 ## 2.- Lectura de los datos y análisis preliminar
 
-#### Origen de los datos
+### Origen de los datos
 
 El banco aporta un conjunto de datos sobre una gran cantidad de variables con el objetivo de predecir si un cliente está satisfecho o insatisfecho con su experiencia con la entidad. 
 
 1. En primer lugar, se aporta un fichero [training.csv](https://www.kaggle.com/c/santander-customer-satisfaction/download/train.csv.zip) que consta de cientos de variables **numéricas y anónimas**, incluyendo una columna llamada `TARGET` que contiene un 1 para clientes insatisfechos y un 0 para los satisfechos.
 2. Un segundo fichero [test.csv](https://www.kaggle.com/c/santander-customer-satisfaction/download/test.csv.zip), en el que predecir para cada cliente si está satisfecho o no.
 
-##### Lectura y preparación de los ficheros de datos
+### Lectura y preparación de los ficheros de datos
 
 Ya que el plazo de la competición ha vencido, no hay posibilidad de comprobar la exactitud de modelo entrenado con el fichero de training del Banco Santander. Por lo tanto, se procede a dividir el fichero de training original en dos, el primero hará la función de training y el segundo la función de test. En el training se entrenará el modelo de aprendizaje automático o **machine learning** y con el segundo se comprobará su validez. La división se efectuará aleatoriamente dejando dos bloques de igual tamaño y con igual número de 0s y 1s en su columna `TARGET`.
 
@@ -79,7 +79,7 @@ df_test$TARGET <- NULL
 
 ```
 
-#### Análisis inicial de los datos
+### Análisis inicial de los datos
 
 El Banco Santander no aporta ningún tipo de información sobre el significado concreto de cada uno de los predictores, e incluso en la breve descripción aportada, se recalca el carácter anónimo de dichas variables. En principio, no se prevé que este anonimato pueda impactar en el cálculo de predicciones sobre si un cliente está satisfecho o no. No obstante, de cara a una interpretación posterior, podrían ser de utilidad las opiniones sobre el significado de dichas variables expresadas por diferentes usuarios en el [foro de Kaggle](https://www.kaggle.com/c/santander-customer-satisfaction/forums).
 
@@ -98,7 +98,7 @@ cat("\nTrain:  número de filas: ", dim(df_train)[1], ", número de columnas: ",
 
 En esta fase del proyecto, se lleva a cabo una predicción básica que consiste en utilizar todo el conjunto de datos `TRAINING` aportado por el Banco Santander y, sin ningún tratamiento previo, entrenar el modelo de predicción elegido con todos sus parámetros por defecto.
 
-#### Introducción a xgboost: eXtreme Gradient Boosting
+### Introducción a xgboost: eXtreme Gradient Boosting
 
 XGBoost es una implementación del algoritmo **Gradient Boost**, el cual está basado en multitud de árboles de decisión. Inicialmente fue diseñado y desarrollado en C++ por Tianqi Chen, para posteriormente Tong He elaborar el paquete. Este último, no sólo es conocido por su rapidez y exactitud en la capacidad de predicción exacta, sino que aporta multitud de funciones que ayudan a entender el modelo fácilmente.
 
@@ -110,7 +110,7 @@ matrix_train <- xgb.DMatrix(data.matrix(df_train), label = as.numeric(df_target)
 
 ```
 
-#### Parámetros de xgboost
+### Parámetros de xgboost
 
 A la hora de ejecutar xgboost, se contemplan tres tipos de parámetros posibles: parámetros generales, parámetros _booster_ y parámetros sobre tarea.
 
@@ -154,7 +154,7 @@ perf_test <- performance(pred_test, measure = "tpr", x.measure = "fpr")
 
 ```
 
-#### Curva ROC
+### Curva ROC
 
 Cuando se trata de un clasificador binario como el que nos ocupa, existen dos tipos de errores para medir la exactitud de las predicción realizada:
 
@@ -179,7 +179,7 @@ legend(.6,0.36,c("train","test"),lty=c(1,1),col=c("red","blue"))
 
 ```
 
-#### Resultado de predicción básica
+### Resultado de predicción básica
 
 Finalmente se calcula el parámetro AUC que no es sino el área bajo dicha curva ROC (acrónimo de **A**rea **U**nder the ROC **C**urve), ya que es el parámetro de evaluación que usa Banco Santander en esta competición. En general, y este caso no es de otra forma, la exactitud de las predicciones son mas altas para el fichero de training que para el de test. No obstante, la gran diferencia que se da en este caso entre ambas hace pensar en el concepto de **overfitting**, el cual se explica en profundidad en un capítulo posterior.
 
@@ -193,9 +193,43 @@ cat(paste0("Predicción Básica. Training AUC = ", round(auc_train_value,6)," Te
 
 ```
 
-## 4.- Predicción incluyendo selección de variables
+## 4.- Predicción tras modificación del conjunto de datos
 
-La reciente explosión en tamaño de los datos disponibles ha provocado el desarrollo, no solo de plataformas Big Data, sino también de algoritmos de análisis paralelizado de dichos datos. En este caso los datos no han crecido tanto en número de registros como en la cantidad de atributos disponibles **(369 columnas)**. Sin embargo, no siempre más es mejor, ya que demasiados predictores o dimensiones pueden conducir a un pobre rendimiento en el análisis posterior, tanto en la velocidad de ejecución como el acierto de las predicciones.
+### Tratamiento de outliers
+
+Cuando un valor de un conjunto de datos se desvía marcadamente del resto, estamos en presencia de un **outlier**, el cual es debido a alguna de las siguienres circunstancias:
+
+1. El valor representa una ocurrencia extraña, pero es un valor válido.
+2. El valor representa una ocurrencia usual de otra distribución.
+3. El valor es claramente un error.
+
+A continuación, se procede a modificar lo que se entiende son outliers de la columna `var3`:
+
+```{r}
+
+head(sort(unique(df_train$var3)))
+head(sort(unique(df_test$var3)))
+df_train[df_train$var3 == -999999,c("var3")] <- -1
+df_test[df_test$var3 == -999999,c("var3")] <- -1
+
+```
+
+### Creación de variables.
+
+Para aumentar la relación entre las variables y el `TARGET` es posible , aplicando transformaciones lineales y no lineales, añadir predictores adicionales que mejoren la exactitud del sistema de predicción.
+
+En este caso, se añade una variable con el número de ceros de cada fila ya que esta transformación no lineal (se comprueba con posterioridad) aumenta la capacidad de predicción del modelo utilizado.
+
+```{r}
+
+df_train$num_zeros <- rowSums(df_train == 0)
+df_test$num_zeros <- rowSums(df_test == 0)
+
+```
+
+### Selección de variables
+
+La reciente explosión en tamaño de los datos disponibles ha provocado el desarrollo, no solo de plataformas Big Data, sino también de algoritmos de análisis paralelizado de dichos datos. En este caso los datos no han crecido tanto en número de registros como en la cantidad de atributos disponibles **(369 columnas)**. Sin embargo y al contrario que en el epígrafe anterior, no siempre más es mejor, ya que demasiados predictores o dimensiones pueden conducir a un pobre rendimiento en el análisis posterior, tanto en la velocidad de ejecución como el acierto de las predicciones.
 
 Entre multitud alternativas, a continuación se introducen tres clases importantes de métodos para la exclusión de variables irrelevantes:
 
@@ -264,17 +298,17 @@ names_prev <- names(df_train)
 matrix_train <- xgb.DMatrix(data.matrix(df_train), label = as.numeric(df_target))
 model <- xgb.train(data = matrix_train, param = fix_params, nrounds = 100, verbose = 0)
 imp_matrix <- xgb.importance(feature_names = names(df_train), model = model)
-df_test <- df_test[,imp_matrix[imp_matrix$Gain>0.0005]$Feature]
-df_train <- df_train[,imp_matrix[imp_matrix$Gain>0.0005]$Feature]
+df_test <- df_test[,imp_matrix[imp_matrix$Gain>0.001]$Feature]
+df_train <- df_train[,imp_matrix[imp_matrix$Gain>0.001]$Feature]
 names_prev[!(names_prev %in% names(df_train))]
 
 cat("Número de filas: ", dim(df_train)[1], " Número de columnas: ", dim(df_train)[2])
 
 ```
 
-#### Resultado de predicción con selección de variables
+### Resultado de predicción tras modificación de los conjuntos de datos
 
-A continuación se ejecuta el mismo entrenamiento y predicción que en el apartado básico: se utiliza xgboost con todos los parámetros por defecto. El único cambio consiste en hacerlo utilizando sólo el subconjunto de variables seleccionadas (66 de las 369 originales). Se comprueba que mejoran tanto la velocidad de ejecución como el acierto de las predicciones, tanto para training como, lo que es más importante, para test.
+A continuación se ejecuta el mismo entrenamiento y predicción que en el apartado básico: se utiliza xgboost con todos los parámetros por defecto. El único cambio consiste en hacerlo utilizando sólo el subconjunto de variables seleccionadas (64+1 de las 369 originales). Se comprueba que mejoran tanto la velocidad de ejecución como el acierto de las predicciones en el apartado de training.
 
 ```{r fig.width=7, fig.height=7 }
 
@@ -329,7 +363,7 @@ En este sentido, la validación cruzada o __cross-validation__ es una técnica u
 
 En realidad, la validación cruzada proviene de la mejora del método de retención o __holdout method__, que consiste en dividir en dos conjuntos complementarios los datos inicial (training y validation). A continuación sólo se ajusta la función de aproximación con el conjunto de datos de training y a continuación se predicen y se validan los valores de salida para el conjunto de datos de validation. Ya que la evaluación puede depender en gran medida de cómo es la división entre datos de training y validation aparece el concepto de validación cruzada.
 
-#### Validación cruzada de k iteraciones
+### Validación cruzada de k iteraciones
 
 En la validación cruzada de K iteraciones o __K-fold cross-validation__ los datos de muestra se dividen en K subconjuntos. Uno de los subconjuntos se utiliza como datos de validation y el resto (K-1) como datos de training. El proceso de validación cruzada es repetido durante k iteraciones, con cada uno de los posibles subconjuntos de datos de prueba. Finalmente se realiza la media aritmética de los resultados de cada iteración para obtener un único resultado.
 
@@ -353,7 +387,7 @@ text(42,0.855,paste("max nround  = ", max_round))
 
 ```
 
-#### Determinación de parámetros óptimos de XGBoost
+### Determinación de parámetros óptimos de XGBoost
 
 Hasta este momento, siempre se ha ejecutado la función de entrenamiento del modelo `xgb.train` con los parámetros de booster por defecto. El posterior ajuste de los siguientes parámetros permitirá aumentar la exactitud de la predicción y ajustar el overfitting:
 
@@ -400,11 +434,9 @@ if (cv_done){
 
 ```
 
-#### Resultado de predicción con Cross-validation
+### Resultado de predicción con Cross-validation
 
 Finalmente se vuelve a ejecutar el entrenamiento sobre el conjunto de datos de training, pero esta vez utilizando los parámetros que maximizan el valor de `model_cv$test.auc.mean` del anterior apartado de cross-validation. Finalmente, se predice sobre el modelo de training y de test y se comparan ambos resultados.
-
-En cuanto a la comparación respecto a la "Predicción básica" y la "Predicción con selección de variables", si bien, tanto el tiempo necesario para entrenar el modelo como la exactitud de la predicción en el conjunto de datos de training empeora, la mejora observada en la predicción sobre los datos de test, hace que el proceso de cross-validation sea totalmente imprescindible.
 
 ```{r fig.width=4, fig.height=4 }
 
@@ -455,6 +487,10 @@ auc_test_value <- auc_perf@y.values[[1]]
 cat(paste0("Predicción con  cross-validation. Training AUC = ", round(auc_train_value,6)," Test AUC = ", round(auc_test_value,6)))
 
 ```
+
+### Conclusión
+
+Comparando estos resultados con los de la "Predicción básica" y la "Predicción tras modificación de datasets", puede apreciarse que, si bien, tanto el tiempo necesario para entrenar el modelo como la exactitud de la predicción en el conjunto de datos de training empeora, la mejora observada en la predicción sobre los datos de test, hace que el proceso de cross-validation sea totalmente imprescindible.
 
 ## 6.- Referencias
 
