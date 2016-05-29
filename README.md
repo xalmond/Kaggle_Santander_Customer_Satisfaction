@@ -9,7 +9,7 @@ Por ello, con fecha del 2 de Marzo de 2016, publica en la plataforma [Kaggle](ht
 
 ### Descripción de los directorios
 
-El directorio [real](https://github.com/xalmond/kaggle_santander_customer_satisfaction/tree/master/real) contiene los scripts de R necesarios para responder a la competición, y están basados en el modelo XGBoost - e**X**treme **G**radient **B**oost:
+El directorio [submission](https://github.com/xalmond/kaggle_santander_customer_satisfaction/tree/master/submission) contiene los scripts de R necesarios para responder a la competición, y están basados en el modelo XGBoost - e**X**treme **G**radient **B**oost:
 
     + Lectura y preparación de los datasets
     + Selección de variables
